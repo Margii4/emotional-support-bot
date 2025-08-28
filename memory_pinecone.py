@@ -9,26 +9,21 @@ from pinecone import Pinecone, ServerlessSpec
 
 logger = logging.getLogger(__name__)
 
-# ========= ENV / CONST =========
 BOT_ID = os.getenv("BOT_ID", "psychologist")
 
-# OpenAI embeddings
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-ada-002")  # 1536 dims
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-ada-002")  
 EMBED_TRUNCATE_CHARS = int(os.getenv("EMBED_TRUNCATE_CHARS", "4000"))
 DIMENSION = 1536  # for ada-002
 
-# Pinecone
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 PINECONE_CLOUD = os.getenv("PINECONE_CLOUD", "aws")
 PINECONE_REGION = os.getenv("PINECONE_REGION", "us-east-1")
 PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "psychologist-memory")
 
-# Retrieval tuning
-RECENT_TAU_SEC = int(os.getenv("RECENT_TAU_SEC", str(6 * 3600)))  # «свежесть»: 6 часов
-RECENCY_BIAS = float(os.getenv("RECENCY_BIAS", "0.35"))           # вклад свежести в итоговый скор
+RECENT_TAU_SEC = int(os.getenv("RECENT_TAU_SEC", str(6 * 3600)))  
+RECENCY_BIAS = float(os.getenv("RECENCY_BIAS", "0.35"))           
 
-# ========= CLIENTS =========
-_oa = OpenAI()  # reads OPENAI_API_KEY from env
+_oa = OpenAI()  
 
 _pc = Pinecone(api_key=PINECONE_API_KEY)
 _existing = [i.name for i in _pc.list_indexes()]
@@ -41,14 +36,12 @@ if PINECONE_INDEX_NAME not in _existing:
     )
 _index = _pc.Index(PINECONE_INDEX_NAME)
 
-# ========= HELPERS =========
 def _now() -> float:
     return time.time()
 
 def _embed_text(text: str):
     if not isinstance(text, str) or not text.strip():
         return None
-    # обрезаем длинные тексты перед эмбеддингом
     payload = text if len(text) <= EMBED_TRUNCATE_CHARS else (text[:EMBED_TRUNCATE_CHARS] + " …")
     try:
         resp = _oa.embeddings.create(model=EMBEDDING_MODEL, input=[payload])
@@ -67,10 +60,8 @@ def _recency_weight(ts: float, now_ts: float) -> float:
     if ts <= 0:
         return 0.0
     age = max(0.0, now_ts - ts)
-    # e^{-age/tau}
     return pow(2.718281828, -age / max(1.0, RECENT_TAU_SEC))
 
-# ========= WRITE =========
 def save_message(user_id: str, chat_id: str, message: str, role: str) -> bool:
     if not isinstance(message, str) or len(message.strip()) < 2:
         return False
@@ -191,7 +182,6 @@ def get_recent_user_messages(chat_id: str, limit: int = 3) -> List[Dict[str, Any
         logger.error(f"Pinecone recent-user error: {e}", exc_info=True)
         return []
 
-# ========= DELETE =========
 def clear_memory(chat_id: str) -> bool:
     try:
         _index.delete(filter={"bot_id": BOT_ID, "chat_id": str(chat_id)})
