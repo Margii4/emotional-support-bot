@@ -1,17 +1,29 @@
-# PowerShell
-@"
+# .dockerignore
+# VCS
+.git
+.gitignore
+
+# Python
 __pycache__/
 *.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
 .venv/
 venv/
 .mypy_cache/
 .pytest_cache/
+
+# OS / editors
 .DS_Store
 .idea/
 .vscode/
+
+# Logs / build
 *.log
 build/
 dist/
+
+# Secrets / env
 .env
 .env.*
-"@ | Set-Content .gitignore

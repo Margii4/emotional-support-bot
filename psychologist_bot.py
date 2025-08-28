@@ -1,5 +1,6 @@
 import os
 import time
+import re
 import logging
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
@@ -11,41 +12,25 @@ from telegram.ext import (
     filters,
     ContextTypes
 )
-import openai
+from openai import OpenAI
 
-# ========== ENV ==========
+# ======== ENV ========
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
-PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME")
-PINECONE_CLOUD = os.getenv("PINECONE_CLOUD", "aws")
-PINECONE_REGION = os.getenv("PINECONE_REGION", "us-east-1")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # read for completeness; client reads from env
+MODEL_NAME = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")  # перешли на 4.1-mini по умолчанию
 
-openai.api_key = OPENAI_API_KEY
+# OpenAI client (SDK >= 1.x)
+oa = OpenAI()  # uses OPENAI_API_KEY
 
-# ========== LOGGING ==========
+# ======== LOGGING ========
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger("psychologist_bot")
 
-# ========== PINECONE ==========
-from pinecone import Pinecone, ServerlessSpec
-
-DIMENSION = 1536
-pc = Pinecone(api_key=PINECONE_API_KEY)
-if PINECONE_INDEX_NAME not in [i.name for i in pc.list_indexes()]:
-    pc.create_index(
-        name=PINECONE_INDEX_NAME,
-        dimension=DIMENSION,
-        metric="cosine",
-        spec=ServerlessSpec(cloud=PINECONE_CLOUD, region=PINECONE_REGION)
-    )
-index = pc.Index(PINECONE_INDEX_NAME)
-
-# ========== LANGUAGES ==========
+# ======== LANGUAGES / PROMPTS ========
 LANGUAGES = {
     "en": {
         "greet": "👋 Hello! I'm your caring support assistant. Write me any concern — I'm here to help you emotionally.",
@@ -67,19 +52,25 @@ LANGUAGES = {
             [InlineKeyboardButton("🌐 Language", callback_data='language')],
         ],
         "system_prompt":
-            (
-                "You are a warm, empathetic, and respectful virtual assistant designed to provide emotional support only. "
-"You always communicate with kindness, understanding, and care. "
-"You never offer any medical, psychological, or psychiatric diagnoses or suggest treatments of any kind. "
-"You never give medical advice and do not interpret symptoms. "
-"If the user asks for a diagnosis, medical interpretation, or therapy, respond gently by explaining "
-"that your role is to offer emotional support only, and that they should reach out to a qualified healthcare professional for medical concerns. "
-"Your goal is to make the user feel heard, understood, respected, and safe. "
-"Focus on active listening, warmth, and emotional validation. "
-"If the user shares something positive, celebrate it with them and encourage their progress. "
-"Always respond with a compassionate, non-judgmental human tone."
-
-            )
+          (
+"You are an adaptive, human, empathetic companion for EMOTIONAL SUPPORT ONLY. "
+"Your purpose is to attune to the user, help them feel heard, understood, and safe — and stay within emotional support (not therapy, not professional advice). "
+"Do not perform unrelated tasks (math, coding, emails, errands) and do not give diagnoses or medical/legal/financial advice. If asked, decline once with warmth and refocus on feelings and coping. "
+"\n"
+"Core approach: "
+"- Orient to the situation: notice energy, urgency, and what they explicitly want. Match length and tone (brief if they’re drained; a touch fuller if they invite it). "
+"- Sound human. Vary openings; avoid repeating the same frames (“It sounds like…”, “Would you like…”, “I’m sorry you’re feeling…”). Mirror their style (punctuation, emojis) but use emojis only if they used them. "
+"- Be specific when helpful: weave one concrete detail from what they said; don’t force it every time. "
+"- Choose ONE primary move per message: reflect; deepen; normalize; offer a tiny coping option; celebrate a small win; set a kind boundary. "
+"- Questions: at most one open question unless they clearly invite coaching. Statements and gentle options often help more than interrogating. "
+"- Keep it concise and warm: 2–4 sentences, ≤90 words, or shorter to match the user. No bullet lists unless the user asks. "
+"\n"
+"Micro-options you may offer (with consent, never as orders): a 30–60s grounding breath; 5-4-3-2-1 sensory check; name-and-allow the feeling; a single tiny next step; a compassionate reframe. "
+"\n"
+"Safety: if self-harm, harm to others, or danger appears—express care; say you can’t provide crisis counseling; encourage contacting local emergency services, a trusted person, or a hotline; ask if they feel safe now and, only if welcomed, offer a brief grounding option. "
+"\n"
+"Boundary reminder: if they keep pushing for non-support tasks, kindly restate the boundary once and invite them to share what feels heavy about the task instead."
+)
     },
     "ru": {
         "greet": "👋 Привет! Я — твой заботливый ассистент поддержки. Напиши мне любую тревогу — я здесь, чтобы поддержать тебя эмоционально.",
@@ -101,19 +92,25 @@ LANGUAGES = {
             [InlineKeyboardButton("🌐 Язык", callback_data='language')],
         ],
         "system_prompt":
-            (
-               "Ты — тёплый, эмпатичный и уважительный виртуальный ассистент, созданный исключительно для оказания эмоциональной поддержки. "
-"Ты всегда общаешься с добротой, пониманием и заботой. "
-"Ты никогда не ставишь медицинских, психологических или психиатрических диагнозов и не предлагаешь никаких методов лечения. "
-"Ты не даёшь медицинских советов и не интерпретируешь симптомы. "
-"Если пользователь просит диагноз, медицинскую интерпретацию или терапию, мягко объясни, "
-"что твоя задача — оказывать только эмоциональную поддержку, и что важно обратиться к квалифицированному специалисту. "
-"Твоя цель — чтобы пользователь чувствовал себя услышанным, понятым, уважаемым и в безопасности. "
-"Сосредоточься на активном слушании, теплоте и принятии эмоций. "
-"Если пользователь делится чем-то хорошим, порадоваться вместе с ним и поддержать его прогресс. "
-"Всегда отвечай в тёплом, человечном и безоценочном тоне."
-
-            )
+         (
+"Ты — адаптивный, живой и эмпатичный собеседник ТОЛЬКО для ЭМОЦИОНАЛЬНОЙ ПОДДЕРЖКИ. "
+"Твоя цель — подстраиваться под человека, чтобы он чувствовал себя услышанным, понятым и в безопасности; оставайся в рамках эмоциональной поддержки (это не терапия и не проф. советы). "
+"Не выполняй посторонние задачи (математика, код, письма, поручения) и не давай диагнозов или мед./юрид./фин. рекомендаций. Если просят — один раз мягко откажи и верни фокус на чувства и способы справляться. "
+"\n"
+"Как отвечать: "
+"- Сначала сориентируйся: энергия, срочность, явный запрос. Подстрой длину и тон (короче, если человек выжат; чуть подробнее — если приглашает). "
+"- Звучать по-человечески. Меняй начала; не повторяй шаблоны («Похоже, что…», «Хочешь поговорить…», «Сочувствую, что…»). Отзеркаливай стиль (пунктуацию, эмодзи), но используй эмодзи только если их использует собеседник. "
+"- Конкретика, когда уместно: упомяни одну деталь из его слов; не насилуй это правило. "
+"- Один приём на сообщение: отражение; углубление; нормализация; маленькая идея копинга; отметить маленький успех; доброжелательная граница. "
+"- Вопросы: не более одного открытого, если только явно не просят коучинг. Чаще помогают утверждения и мягкие опции, а не допрос. "
+"- Кратко и тепло: 2–4 предложений, до 90 слов, или короче под темп человека. Без списков, если сам человек их не просит. "
+"\n"
+"Микро-опции (по согласию, не как приказ): 30–60 сек дыхание-заземление; техника 5-4-3-2-1; назвать и позволить чувству быть; один мини-шаг; бережная переоценка ситуации. "
+"\n"
+"Безопасность: если появляются риски себе/другим/опасность — вырази заботу; поясни, что не даёшь кризисную помощь; предложи связаться с экстренными службами, близким или линией доверия; спроси, в безопасности ли сейчас, и при согласии предложи короткое заземление. "
+"\n"
+"Граница: если продолжают просить несвязанные задачи, ещё раз доброжелательно напомни про границу и пригласи обсудить, что именно в этой задаче тяжело."
+)
     },
     "it": {
         "greet": "👋 Ciao! Sono il tuo assistente di supporto emotivo. Scrivimi qualsiasi preoccupazione — sono qui per aiutarti.",
@@ -135,21 +132,100 @@ LANGUAGES = {
             [InlineKeyboardButton("🌐 Lingua", callback_data='language')],
         ],
         "system_prompt":
-            (
-                "Sei un assistente virtuale empatico, premuroso e rispettoso, progettato per offrire esclusivamente supporto emotivo. "
-        "Comunichi sempre con gentilezza, comprensione ed empatia. "
-        "Non fornisci mai diagnosi mediche, psicologiche o psichiatriche e non suggerisci trattamenti di alcun tipo. "
-        "Non offri mai consigli medici e non interpreti sintomi. "
-        "Se l’utente chiede una diagnosi, un'interpretazione medica o una terapia, rispondi con delicatezza spiegando "
-        "che il tuo ruolo è solo quello di fornire supporto emotivo e che per questioni mediche è importante rivolgersi a uno specialista qualificato. "
-        "Il tuo obiettivo è far sentire l’utente ascoltato, compreso, rispettato e al sicuro. "
-        "Concentrati sull’ascolto attivo, sull’accoglienza calorosa e sulla validazione delle emozioni. "
-        "Se l’utente condivide qualcosa di positivo, celebra insieme a lui e incoraggialo. "
-        "Rispondi sempre con tono umano, accogliente e privo di giudizio."
-            )
+           (
+"Sei un compagno empatico, umano e adattivo SOLO per il SUPPORTO EMOTIVO. "
+"Il tuo scopo è sintonizzarti sull’utente perché si senta ascoltato, compreso e al sicuro; resta nell’ambito del supporto emotivo (non terapia, non consulenza professionale). "
+"Non svolgere compiti non pertinenti (matematica, coding, email, commissioni) e non fornire diagnosi o consigli medici/legali/finanziari. Se richiesto, rifiuta una volta con gentilezza e riporta l’attenzione su emozioni e coping. "
+"\n"
+"Stile di risposta: "
+"- Orientati su energia, urgenza e richiesta esplicita. Abbina lunghezza e tono (breve se sono stanchi; un po’ più ampio se lo invitano). "
+"- Suona umano. Varia le aperture; evita formule ripetitive (“Sembra che…”, “Ti andrebbe…”, “Mi dispiace che…”). Rispecchia lo stile (punteggiatura, emoji) ma usa emoji solo se le usa l’utente. "
+"- Specificità quando utile: integra un dettaglio concreto; non forzarlo sempre. "
+"- Una sola mossa per messaggio: riflettere; approfondire; normalizzare; offrire una micro-strategia; celebrare un piccolo passo; porre un limite gentile. "
+"- Domande: al massimo una domanda aperta, o nessuna. "
+"- Breve e caldo: 2–4 frasi, ≤90 parole, o più corto in base al ritmo dell’utente. "
+"\n"
+"Micro-opzioni (solo con consenso): respiro di grounding 30–60s; 5-4-3-2-1 sensoriale; nominare-e-accogliere l’emozione; un micro-passo; una riformulazione compassionevole. "
+"\n"
+"Sicurezza: se emergono autolesionismo, danno ad altri o pericolo — esprimi cura; spiega che non offri supporto in crisi; invita a contattare i servizi d’emergenza, una persona fidata o una helpline."
+)
     }
 }
 DEFAULT_LANG = "en"
+
+# ======== STYLE HINTS (жёсткий контроль лаконичности) ========
+STYLE_HINTS = {
+    "ru": (
+        "Пиши КРАТКО: 2–4 предложения (≤90 слов). "
+        "Не повторяй заверения и клише. Максимум один открытый вопрос. "
+        "Сделай одно конкретное наблюдение и одну маленькую опцию/идею."
+    ),
+    "en": (
+        "Be CONCISE: 2–4 sentences (≤90 words). "
+        "No repeated reassurances or generic clichés. Max one open question. "
+        "Offer one concrete observation and one tiny option."
+    ),
+    "it": (
+        "Scrivi CONCISO: 2–4 frasi (≤90 parole). "
+        "Niente ripetizioni o frasi di rito. Max una domanda aperta. "
+        "Un dettaglio concreto e una piccola opzione."
+    ),
+}
+
+# ======== de-dupe/shorten post-processor ========
+REPLY_MAX_SENTENCES = 4
+REPLY_MAX_WORDS = 90
+
+_SENT_SPLIT = re.compile(r'(?<=[.!?])\s+')
+_FILLERS_START = [
+    "понимаю", "мне жаль", "хочу заверить", "важно помнить",
+    "i understand", "i’m sorry", "i want to assure", "it’s important to remember",
+    "capisco", "mi dispiace", "vorrei rassicurarti", "è importante ricordare"
+]
+
+def _shrink_reply(text: str, max_sentences: int = REPLY_MAX_SENTENCES, max_words: int = REPLY_MAX_WORDS) -> str:
+    if not isinstance(text, str):
+        return text
+    sents = [s.strip() for s in _SENT_SPLIT.split(text.strip()) if s.strip()]
+    if not sents:
+        return text.strip()
+
+    # 1) Срезаем типичное «водное» первое предложение, если дальше есть содержание
+    first = sents[0].lower()
+    if any(first.startswith(f) for f in _FILLERS_START) and len(sents) > 1:
+        sents = sents[1:]
+
+    # 2) Убираем повторы
+    seen, dedup = set(), []
+    for s in sents:
+        key = re.sub(r'\s+', ' ', s.lower())
+        if key not in seen:
+            seen.add(key)
+            dedup.append(s)
+
+    # 3) Лимит по предложениям
+    clipped = dedup[:max_sentences]
+
+    # 4) Лимит по словам
+    words = " ".join(clipped).split()
+    if len(words) > max_words:
+        return " ".join(words[:max_words]).rstrip(",.;:!—- ") + "…"
+    return " ".join(clipped).strip()
+
+# ======== AUTO-DETECT MESSAGE LANGUAGE (ru/it/en) ========
+_CYRILLIC_RE = re.compile(r'[\u0400-\u04FF]')
+
+def _detect_msg_lang(text: str, fallback: str = "en") -> str:
+    """Очень лёгкий снаффер: кириллица -> ru; набор частых слов -> it; иначе en."""
+    if not isinstance(text, str):
+        return fallback
+    t = text.lower()
+    if _CYRILLIC_RE.search(t):
+        return "ru"
+    # грубая эвристика для итальянского
+    if re.search(r"\b(come|stai|sto|va|grazie|perch[eè]|quest[oa]|aiuto|cosa|penso|sent[io])\b", t):
+        return "it"
+    return "en"
 
 def get_lang(context):
     return context.user_data.get("lang", DEFAULT_LANG)
@@ -167,70 +243,53 @@ def lang_choice_keyboard():
         [InlineKeyboardButton(LANGUAGES['it']["lang_it"], callback_data='setlang_it')],
         [InlineKeyboardButton(LANGUAGES['ru']["lang_ru"], callback_data='setlang_ru')]
     ])
-# ========== VECTOR MEMORY ==========
-def get_embedding(text):
-    try:
-        response = openai.embeddings.create(
-            input=[text],
-            model="text-embedding-ada-002"
-        )
-        return response.data[0].embedding
-    except Exception as e:
-        logger.error(f"Embedding error: {e}", exc_info=True)
-        return [0.0] * DIMENSION
 
-def save_message(user_id, message, role):
-    emb = get_embedding(message)
-    meta = {
-        "user_id": user_id,
-        "role": role,
-        "text": message,
-        "timestamp": str(time.time())
-    }
-    vector_id = f"{user_id}-{int(time.time()*1000)}"
-    try:
-        index.upsert(vectors=[(vector_id, emb, meta)])
-    except Exception as e:
-        logger.error(f"Pinecone upsert error: {e}")
+# ======== MEMORY (external module) ========
+from memory_pinecone import (
+    save_message,
+    get_relevant_history,
+    get_recent_history,
+    get_recent_user_messages,  # for recent button
+    clear_memory
+)  # noqa: E402
 
-def get_relevant_history(user_id, query, top_k=8):
-    query_emb = get_embedding(query)
-    try:
-        res = index.query(
-            vector=query_emb,
-            filter={"user_id": user_id},
-            top_k=top_k,
-            include_metadata=True
-        )
-        history = []
-        for match in res.get("matches", []):
-            meta = match.get("metadata", {})
-            role = meta.get("role")
-            text = meta.get("text")
-            if role in ("user", "assistant") and text:
-                history.append({"role": role, "content": text})
-        return history
-    except Exception as e:
-        logger.error(f"Pinecone history query error: {e}")
-        return []
+# ======== LOCAL RECENT CACHE (мгновенная витрина) ========
+RECENT_CACHE_N = 5
 
-def clear_memory(user_id):
-    try:
-        res = index.query(
-            vector=[0.0]*DIMENSION,
-            filter={"user_id": user_id},
-            top_k=1000,
-            include_metadata=False
-        )
-        ids = [m["id"] for m in res.get("matches", [])]
-        if ids:
-            index.delete(ids=ids)
-            return True
-    except Exception as e:
-        logger.error(f"Pinecone clear error: {e}")
-    return False
+def _recent_cache_add(context: ContextTypes.DEFAULT_TYPE, text: str):
+    if not text:
+        return
+    lst = context.chat_data.get("recent_user_msgs", [])
+    lst.insert(0, text)
+    if len(lst) > RECENT_CACHE_N:
+        lst = lst[:RECENT_CACHE_N]
+    context.chat_data["recent_user_msgs"] = lst
 
-# ========== ASYNC HANDLERS ==========
+def _recent_cache_get(context: ContextTypes.DEFAULT_TYPE):
+    return context.chat_data.get("recent_user_msgs", [])
+
+# ======== SMALL TALK DETECTION ========
+_SMALLTALK_PATTERNS = {
+    "ru": r"(как\s+дела( у тебя)?|как\s+ты|как\s+настроение|что\s+делаешь|чем\s+занимаешься)",
+    "en": r"(how\s+are\s+you|how'?s\s+it\s+going|what'?s\s+up)",
+    "it": r"(come\s+stai|come\s+va|che\s+fai|che\s+si\s+dice)"
+}
+_SMALLTALK_REPLY = {
+    "ru": "Спасибо, что спрашиваешь! У меня всё ок — я полностью здесь ради тебя. Что сейчас больше всего занимает тебя?",
+    "en": "Thanks for asking! I’m doing well and fully here for you. What’s most on your mind right now?",
+    "it": "Grazie per averlo chiesto! Sto bene e sono qui per te. Cosa ti pesa di più in questo momento?"
+}
+
+def _is_smalltalk(text: str, lang: str) -> bool:
+    if not isinstance(text, str):
+        return False
+    patt = _SMALLTALK_PATTERNS.get(lang, _SMALLTALK_PATTERNS["en"])
+    return re.search(patt, text.lower()) is not None
+
+def _smalltalk_reply(lang: str) -> str:
+    return _SMALLTALK_REPLY.get(lang, _SMALLTALK_REPLY["en"])
+
+# ======== ASYNC HANDLERS ========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = get_lang(context)
     await update.message.reply_text(LANGUAGES[lang]["greet"], reply_markup=menu_keyboard(context))
@@ -240,6 +299,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     lang = get_lang(context)
     user_id = str(query.from_user.id)
+    chat_id = str(query.message.chat_id)
 
     try:
         if query.data == 'help':
@@ -247,14 +307,28 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif query.data == 'abilities':
             await query.message.reply_text(LANGUAGES[lang]["abilities"], reply_markup=menu_keyboard(context))
         elif query.data == 'recent':
-            msgs = get_relevant_history(user_id, "", top_k=3)
-            if msgs:
-                joined = "\n— ".join([m["content"] for m in msgs if m["role"] == "user"])
+            # 1) сначала из локального кэша
+            cached = _recent_cache_get(context)
+            if cached:
+                joined = "\n— ".join(cached[:3])
                 await query.message.reply_text(LANGUAGES[lang]["recent"] + joined, reply_markup=menu_keyboard(context))
             else:
-                await query.message.reply_text(LANGUAGES[lang]["recent_none"], reply_markup=menu_keyboard(context))
+                # 2) если кэш пуст — берём последние USER-сообщения из Pinecone
+                msgs = get_recent_user_messages(chat_id, limit=3)
+                if msgs:
+                    joined = "\n— ".join([m["content"] for m in msgs])
+                    await query.message.reply_text(LANGUAGES[lang]["recent"] + joined, reply_markup=menu_keyboard(context))
+                else:
+                    # 3) общий fallback
+                    any_msgs = get_recent_history(chat_id, limit=3)
+                    if any_msgs:
+                        joined = "\n— ".join([m["content"] for m in any_msgs])
+                        await query.message.reply_text(LANGUAGES[lang]["recent"] + joined, reply_markup=menu_keyboard(context))
+                    else:
+                        await query.message.reply_text(LANGUAGES[lang]["recent_none"], reply_markup=menu_keyboard(context))
         elif query.data == 'clear':
-            success = clear_memory(user_id)
+            success = clear_memory(chat_id)
+            context.chat_data["recent_user_msgs"] = []  # очищаем локальный кэш
             msg = LANGUAGES[lang]["cleared"] if success else LANGUAGES[lang]["nothing_clear"]
             await query.message.reply_text(msg, reply_markup=menu_keyboard(context))
         elif query.data == 'language':
@@ -269,51 +343,82 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lang = new_lang
             await query.message.reply_text(LANGUAGES[lang]["greet"], reply_markup=menu_keyboard(context))
     except Exception as e:
-        logger.error(f"Button callback error: {e}")
+        logger.error(f"Button callback error: {e}", exc_info=True)
         await query.message.reply_text("Internal error. Please try again.", reply_markup=menu_keyboard(context))
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    lang = get_lang(context)
+    lang = get_lang(context)  # язык интерфейса (кнопки/системный промпт)
     user_id = str(update.message.from_user.id)
+    chat_id = str(update.effective_chat.id)
     user_msg = update.message.text
 
+    # текущие ограничения длины
     if not isinstance(user_msg, str) or len(user_msg) < 2 or len(user_msg) > 1500:
         await update.message.reply_text("Your message is too long or too short.", reply_markup=menu_keyboard(context))
         return
 
-    save_message(user_id, user_msg, "user")
-    history = get_relevant_history(user_id, user_msg, top_k=6)
-    max_chars = 4000
+    # автоопределение языка ИМЕННО ЭТОГО сообщения (правила/стиль будут от него)
+    msg_lang = _detect_msg_lang(user_msg, fallback=lang)
+
+    # --- Small talk: короткий дружелюбный ответ и возврат фокуса на пользователя
+    if _is_smalltalk(user_msg, msg_lang):
+        reply = _smalltalk_reply(msg_lang)
+        save_message(user_id, chat_id, user_msg, "user")
+        _recent_cache_add(context, user_msg)
+        save_message(user_id, chat_id, reply, "assistant")
+        await update.message.reply_text(reply, reply_markup=menu_keyboard(context))
+        return
+
+    # persist user msg (+ локальный кэш)
+    save_message(user_id, chat_id, user_msg, "user")
+    _recent_cache_add(context, user_msg)
+
+    # retrieve semantic history (chat-scoped)
+    history = get_relevant_history(chat_id, user_msg, top_k=5)  # чуть меньше контекста
+    max_chars = 3000
     messages = [{"role": "system", "content": LANGUAGES[lang]["system_prompt"]}]
     total_len = 0
     for h in history:
-        if total_len + len(h["content"]) < max_chars:
-            messages.append(h)
-            total_len += len(h["content"])
-
+        c = h.get("content", "")
+        if total_len + len(c) < max_chars:
+            messages.append({"role": h.get("role", "user"), "content": c})
+            total_len += len(c)
     messages.append({"role": "user", "content": user_msg})
 
     try:
-        response = openai.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=messages,
-            temperature=0.8,
-            max_tokens=300
+        # добавим вторую system-подсказку по ЯЗЫКУ СООБЩЕНИЯ и более строгие параметры генерации
+        final_messages = [
+            {"role": "system", "content": LANGUAGES[lang]["system_prompt"]},                 # язык интерфейса
+            {"role": "system", "content": STYLE_HINTS.get(msg_lang, STYLE_HINTS["en"])},     # стиль от языка сообщения
+            *messages[1:],  # история + пользователь
+        ]
+        resp = oa.chat.completions.create(
+            model=MODEL_NAME,
+            messages=final_messages,
+            temperature=0.6,
+            max_tokens=220,
+            frequency_penalty=0.6,
+            presence_penalty=0.2
         )
-        reply = response.choices[0].message.content.strip()
+        reply = resp.choices[0].message.content.strip()
+        reply = _shrink_reply(reply, max_sentences=REPLY_MAX_SENTENCES, max_words=REPLY_MAX_WORDS)
     except Exception as e:
-        logger.error(f"OpenAI error: {e}")
+        logger.error(f"OpenAI error: {e}", exc_info=True)
         reply = LANGUAGES[lang].get("error", "Sorry, a technical error occurred.")
 
-    save_message(user_id, reply, "assistant")
+    # persist bot reply
+    save_message(user_id, chat_id, reply, "assistant")
     await update.message.reply_text(reply, reply_markup=menu_keyboard(context))
 
 async def error_handler(update, context):
     logger.error(msg="Exception while handling update:", exc_info=context.error)
-    if update and getattr(update, "message", None):
-        await update.message.reply_text("Sorry, an error occurred.", reply_markup=menu_keyboard(context))
+    try:
+        if update and getattr(update, "message", None):
+            await update.message.reply_text("Sorry, an error occurred.", reply_markup=menu_keyboard(context))
+    except Exception:
+        pass
 
-# ========== MAIN ==========
+# ======== MAIN ========
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
