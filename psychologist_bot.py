@@ -14,23 +14,19 @@ from telegram.ext import (
 )
 from openai import OpenAI
 
-# ======== ENV ========
 load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  # read for completeness; client reads from env
-MODEL_NAME = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")  # перешли на 4.1-mini по умолчанию
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")  
+MODEL_NAME = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")  
 
-# OpenAI client (SDK >= 1.x)
-oa = OpenAI()  # uses OPENAI_API_KEY
+oa = OpenAI() 
 
-# ======== LOGGING ========
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger("psychologist_bot")
 
-# ======== LANGUAGES / PROMPTS ========
 LANGUAGES = {
     "en": {
         "greet": "👋 Hello! I'm your caring support assistant. Write me any concern — I'm here to help you emotionally.",
@@ -153,7 +149,6 @@ LANGUAGES = {
 }
 DEFAULT_LANG = "en"
 
-# ======== STYLE HINTS (жёсткий контроль лаконичности) ========
 STYLE_HINTS = {
     "ru": (
         "Пиши КРАТКО: 2–4 предложения (≤90 слов). "
@@ -172,7 +167,6 @@ STYLE_HINTS = {
     ),
 }
 
-# ======== de-dupe/shorten post-processor ========
 REPLY_MAX_SENTENCES = 4
 REPLY_MAX_WORDS = 90
 
@@ -190,12 +184,10 @@ def _shrink_reply(text: str, max_sentences: int = REPLY_MAX_SENTENCES, max_words
     if not sents:
         return text.strip()
 
-    # 1) Срезаем типичное «водное» первое предложение, если дальше есть содержание
     first = sents[0].lower()
     if any(first.startswith(f) for f in _FILLERS_START) and len(sents) > 1:
         sents = sents[1:]
 
-    # 2) Убираем повторы
     seen, dedup = set(), []
     for s in sents:
         key = re.sub(r'\s+', ' ', s.lower())
@@ -203,16 +195,13 @@ def _shrink_reply(text: str, max_sentences: int = REPLY_MAX_SENTENCES, max_words
             seen.add(key)
             dedup.append(s)
 
-    # 3) Лимит по предложениям
     clipped = dedup[:max_sentences]
 
-    # 4) Лимит по словам
     words = " ".join(clipped).split()
     if len(words) > max_words:
         return " ".join(words[:max_words]).rstrip(",.;:!—- ") + "…"
     return " ".join(clipped).strip()
 
-# ======== AUTO-DETECT MESSAGE LANGUAGE (ru/it/en) ========
 _CYRILLIC_RE = re.compile(r'[\u0400-\u04FF]')
 
 def _detect_msg_lang(text: str, fallback: str = "en") -> str:
@@ -222,7 +211,6 @@ def _detect_msg_lang(text: str, fallback: str = "en") -> str:
     t = text.lower()
     if _CYRILLIC_RE.search(t):
         return "ru"
-    # грубая эвристика для итальянского
     if re.search(r"\b(come|stai|sto|va|grazie|perch[eè]|quest[oa]|aiuto|cosa|penso|sent[io])\b", t):
         return "it"
     return "en"
@@ -244,16 +232,14 @@ def lang_choice_keyboard():
         [InlineKeyboardButton(LANGUAGES['ru']["lang_ru"], callback_data='setlang_ru')]
     ])
 
-# ======== MEMORY (external module) ========
 from memory_pinecone import (
     save_message,
     get_relevant_history,
     get_recent_history,
-    get_recent_user_messages,  # for recent button
+    get_recent_user_messages,  
     clear_memory
-)  # noqa: E402
+) 
 
-# ======== LOCAL RECENT CACHE (мгновенная витрина) ========
 RECENT_CACHE_N = 5
 
 def _recent_cache_add(context: ContextTypes.DEFAULT_TYPE, text: str):
@@ -268,7 +254,6 @@ def _recent_cache_add(context: ContextTypes.DEFAULT_TYPE, text: str):
 def _recent_cache_get(context: ContextTypes.DEFAULT_TYPE):
     return context.chat_data.get("recent_user_msgs", [])
 
-# ======== SMALL TALK DETECTION ========
 _SMALLTALK_PATTERNS = {
     "ru": r"(как\s+дела( у тебя)?|как\s+ты|как\s+настроение|что\s+делаешь|чем\s+занимаешься)",
     "en": r"(how\s+are\s+you|how'?s\s+it\s+going|what'?s\s+up)",
@@ -289,7 +274,6 @@ def _is_smalltalk(text: str, lang: str) -> bool:
 def _smalltalk_reply(lang: str) -> str:
     return _SMALLTALK_REPLY.get(lang, _SMALLTALK_REPLY["en"])
 
-# ======== ASYNC HANDLERS ========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = get_lang(context)
     await update.message.reply_text(LANGUAGES[lang]["greet"], reply_markup=menu_keyboard(context))
@@ -307,19 +291,16 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif query.data == 'abilities':
             await query.message.reply_text(LANGUAGES[lang]["abilities"], reply_markup=menu_keyboard(context))
         elif query.data == 'recent':
-            # 1) сначала из локального кэша
             cached = _recent_cache_get(context)
             if cached:
                 joined = "\n— ".join(cached[:3])
                 await query.message.reply_text(LANGUAGES[lang]["recent"] + joined, reply_markup=menu_keyboard(context))
             else:
-                # 2) если кэш пуст — берём последние USER-сообщения из Pinecone
                 msgs = get_recent_user_messages(chat_id, limit=3)
                 if msgs:
                     joined = "\n— ".join([m["content"] for m in msgs])
                     await query.message.reply_text(LANGUAGES[lang]["recent"] + joined, reply_markup=menu_keyboard(context))
                 else:
-                    # 3) общий fallback
                     any_msgs = get_recent_history(chat_id, limit=3)
                     if any_msgs:
                         joined = "\n— ".join([m["content"] for m in any_msgs])
@@ -328,7 +309,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await query.message.reply_text(LANGUAGES[lang]["recent_none"], reply_markup=menu_keyboard(context))
         elif query.data == 'clear':
             success = clear_memory(chat_id)
-            context.chat_data["recent_user_msgs"] = []  # очищаем локальный кэш
+            context.chat_data["recent_user_msgs"] = []  
             msg = LANGUAGES[lang]["cleared"] if success else LANGUAGES[lang]["nothing_clear"]
             await query.message.reply_text(msg, reply_markup=menu_keyboard(context))
         elif query.data == 'language':
@@ -347,20 +328,17 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text("Internal error. Please try again.", reply_markup=menu_keyboard(context))
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    lang = get_lang(context)  # язык интерфейса (кнопки/системный промпт)
+    lang = get_lang(context)  
     user_id = str(update.message.from_user.id)
     chat_id = str(update.effective_chat.id)
     user_msg = update.message.text
 
-    # текущие ограничения длины
     if not isinstance(user_msg, str) or len(user_msg) < 2 or len(user_msg) > 1500:
         await update.message.reply_text("Your message is too long or too short.", reply_markup=menu_keyboard(context))
         return
 
-    # автоопределение языка ИМЕННО ЭТОГО сообщения (правила/стиль будут от него)
     msg_lang = _detect_msg_lang(user_msg, fallback=lang)
 
-    # --- Small talk: короткий дружелюбный ответ и возврат фокуса на пользователя
     if _is_smalltalk(user_msg, msg_lang):
         reply = _smalltalk_reply(msg_lang)
         save_message(user_id, chat_id, user_msg, "user")
@@ -369,12 +347,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(reply, reply_markup=menu_keyboard(context))
         return
 
-    # persist user msg (+ локальный кэш)
     save_message(user_id, chat_id, user_msg, "user")
     _recent_cache_add(context, user_msg)
 
-    # retrieve semantic history (chat-scoped)
-    history = get_relevant_history(chat_id, user_msg, top_k=5)  # чуть меньше контекста
+    history = get_relevant_history(chat_id, user_msg, top_k=5)  
     max_chars = 3000
     messages = [{"role": "system", "content": LANGUAGES[lang]["system_prompt"]}]
     total_len = 0
@@ -386,11 +362,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     messages.append({"role": "user", "content": user_msg})
 
     try:
-        # добавим вторую system-подсказку по ЯЗЫКУ СООБЩЕНИЯ и более строгие параметры генерации
         final_messages = [
-            {"role": "system", "content": LANGUAGES[lang]["system_prompt"]},                 # язык интерфейса
-            {"role": "system", "content": STYLE_HINTS.get(msg_lang, STYLE_HINTS["en"])},     # стиль от языка сообщения
-            *messages[1:],  # история + пользователь
+            {"role": "system", "content": LANGUAGES[lang]["system_prompt"]},                
+            {"role": "system", "content": STYLE_HINTS.get(msg_lang, STYLE_HINTS["en"])},     
+            *messages[1:],
         ]
         resp = oa.chat.completions.create(
             model=MODEL_NAME,
@@ -406,7 +381,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"OpenAI error: {e}", exc_info=True)
         reply = LANGUAGES[lang].get("error", "Sorry, a technical error occurred.")
 
-    # persist bot reply
     save_message(user_id, chat_id, reply, "assistant")
     await update.message.reply_text(reply, reply_markup=menu_keyboard(context))
 
@@ -418,7 +392,6 @@ async def error_handler(update, context):
     except Exception:
         pass
 
-# ======== MAIN ========
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
