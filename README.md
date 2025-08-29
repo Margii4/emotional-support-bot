@@ -1,6 +1,6 @@
 # 💚 AI Emotional Support Telegram Bot
 
-An empathetic, multilingual emotional-support assistant for Telegram — powered by **OpenAI GPT-4.1-mini**, **Pinecone v2** memory, and **python-telegram-bot**.
+An empathetic, multilingual emotional-support assistant for Telegram — powered by **OpenAI GPT-4.1-mini**, **Pinecone v2** memory, and **aiogram 3.x** (fully async, non-blocking).
 
 📬 Try it: [@margii4_bot](https://t.me/margii4_bot)  
 👤 Author: Margarita Viviers • margaritaviviers@gmail.com • [GitHub @Margii4](https://github.com/Margii4)
@@ -11,58 +11,59 @@ An empathetic, multilingual emotional-support assistant for Telegram — powered
 
 ## 🌟 Features
 
-- 🌍 **Multilingual:** English, Italian, Russian (auto-detect)  
-- 💬 **Emotionally intelligent** replies — empathetic, validating, non-judgmental  
-- 🧠 **Contextual memory** (Pinecone v2): remembers previous messages per user  
-- 🧹 Commands to **view & clear memory**  
-- ❌ **No diagnosis, no advice**: strictly supportive, not medical  
-- 🤖 Powered by GPT-4.1-mini + `text-embedding-ada-002`  
-- 🐳 Docker-ready deployment
+- 🌍 **Multilingual:** English, Italian, Russian (auto-detect)
+- 🤗 Emotionally intelligent replies — empathetic, validating, non-judgmental
+- 🧠 **Contextual memory** via Pinecone v2 (user-specific)
+- 💬 Menu options to view and clear memory
+- 🔐 **No diagnosis, no advice** — strictly emotional support
+- ⚡ Built with **async aiogram 3.x** for parallel, responsive interactions
+- 🐳 Docker-ready for clean and fast deployment
 
 ---
 
 ## 🛠 Stack
 
-| Component           | Used For                         |
-|--------------------|----------------------------------|
-| `python-telegram-bot` | Telegram Bot API               |
-| `openai`            | GPT & embeddings                |
-| `pinecone-client`   | Vector memory (user-specific)   |
-| `.env`              | Secrets management              |
-| `Docker` + `Compose`| Local deployment                |
+| Component         | Used For                        |
+|------------------|---------------------------------|
+| `aiogram` 3.x     | Telegram bot API (async)        |
+| `openai`         | GPT replies + embeddings         |
+| `pinecone-client`| Vector memory (per user)         |
+| `.env`           | API keys & config                |
+| `Docker`         | Containerized deployment         |
 
 ---
 
 ## 🚀 Getting Started
 
-### 🧪 A. Run Locally (no Docker)
+### 🧪 Option A: Run Locally (no Docker)
 
-1. **Clone the repo**:
+1. **Clone the repo**
    ```bash
    git clone https://github.com/Margii4/emotional-support-bot.git
    cd emotional-support-bot
 
-2. **Create a virtual environment**:
+2. **Create virtual environment**
 
    ```bash
-   python -m venv venv
-   source venv/bin/activate  # or venv\Scripts\activate on Windows
+   python -m venv .venv
+   .venv\Scripts\activate      # Windows
+   source .venv/bin/activate  # macOS/Linux
    ```
 
-3. **Install dependencies**:
+3. **Install dependencies**
 
    ```bash
    pip install -r requirements.txt
    ```
 
-4. **Create `.env` file** from the template:
+4. **Create `.env` file**
 
    ```bash
    cp .env.example .env
-   # Fill in your Telegram token, OpenAI key, Pinecone key etc.
+   # Then fill in your OpenAI key, Telegram token, etc.
    ```
 
-5. **Run the bot**:
+5. **Run the bot**
 
    ```bash
    python psychologist_bot.py
@@ -70,23 +71,30 @@ An empathetic, multilingual emotional-support assistant for Telegram — powered
 
 ---
 
-### 🐳 B. Run with Docker
+### 🐳 Option B: Run with Docker
 
-> Requires Docker + Docker Compose installed
+> Requires: Docker & Docker Compose
 
-1. **Build and run**:
+1. **Build and run**
 
    ```bash
-   docker compose up --build
+   docker compose up -d --build
    ```
 
-2. To follow logs:
+2. **Check logs**
 
    ```bash
    docker compose logs -f
    ```
 
-📝 The bot uses **polling**, so no public URL or webhook is required.
+💡 During development, you can mount your code:
+
+```yaml
+volumes:
+  - ./:/app
+```
+
+🧠 The bot uses polling (no public URL or webhook needed).
 
 ---
 
@@ -94,12 +102,12 @@ An empathetic, multilingual emotional-support assistant for Telegram — powered
 
 ```
 emotional-support-bot/
-├── psychologist_bot.py       # main Telegram logic
-├── memory_pinecone.py        # vector memory logic (save/query/delete)
-├── Dockerfile                # Docker build file
-├── docker-compose.yml        # Compose file
+├── psychologist_bot.py       # main async bot logic
+├── memory_pinecone.py        # vector DB handling
 ├── requirements.txt
-├── .env.example              # Template for environment variables
+├── .env.example              # environment variable template
+├── Dockerfile
+├── docker-compose.yml
 ├── .gitignore
 └── .dockerignore
 ```
@@ -118,47 +126,45 @@ OPENAI_MODEL=gpt-4.1-mini
 
 # Pinecone
 PINECONE_API_KEY=your_pinecone_key
-PINECONE_INDEX_NAME=psychologist-memory
+PINECONE_INDEX_NAME=psychologist-bot
 PINECONE_CLOUD=aws
 PINECONE_REGION=us-east-1
 ```
 
 ---
 
-## 🧠 Memory System
+## 🧠 Memory Logic
 
-* Vector store: **Pinecone v2**
-* For each user message, bot saves:
+* Embedding model: `text-embedding-3-small` (configurable)
+* Vector DB: Pinecone v2
+* For each message:
 
-  * `user_id`
-  * `role` (user/assistant)
-  * `message`
-  * `timestamp`
-* At reply time, bot retrieves **most relevant past messages** from memory (filtered by `user_id`).
-* You can type:
+  * saves `chat_id`, `user_id`, role, content
+  * retrieves most relevant 3–5 items per response
+* Auto-clearing per user supported
 
-  * **"My recent queries"** — to see what's stored
-  * **"Clear my memory"** — to delete only **your** history
+🔎 Commands:
+
+* `My recent queries` → shows message history
+* `Clear my memory` → removes memory from Pinecone
+* `Change language` → switch manually
 
 ---
 
-## 🤖 Commands
+## 🤖 UI Flow
 
-| Command             | Description                              |
-| ------------------- | ---------------------------------------- |
-| `/start`            | Starts interaction                       |
-| `What can you do?`  | Shows bot's capabilities                 |
-| `My recent queries` | Shows user's message history from memory |
-| `Clear my memory`   | Deletes user's memory from Pinecone      |
-| `Change language`   | Lets user manually choose a language     |
+* `/start` launches welcome message + menu
+* Users can type anything — bot responds with 2–4 sentence support
+* No advice. No therapy. Only emotional acknowledgment and grounding.
 
 ---
 
 ## 🧾 Notes
 
-* System prompts are separated by language (EN / RU / IT)
-* Language is **auto-detected**, but can be **manually changed**
-* This bot provides **emotional support only**. No diagnoses, therapy, or health advice.
+* System prompts vary by language (EN / RU / IT)
+* Language is **auto-detected**, but can be **changed manually**
+* Async replies use `ChatAction.TYPING`
+* `parse_mode=HTML` is set via `DefaultBotProperties` (aiogram ≥ 3.7+)
 
 ---
 
@@ -166,13 +172,13 @@ PINECONE_REGION=us-east-1
 
 Margarita Viviers — AI & Prompt Engineer
 📬 [margaritaviviers@gmail.com](mailto:margaritaviviers@gmail.com)
-🌐 [GitHub @Margii4](https://github.com/Margii4)
-
-💡 If you want to deploy a version of this bot for your company or team — reach out!
+🔗 [GitHub @Margii4](https://github.com/Margii4)
 
 ---
 
-## 📌 License
+## 📄 License
 
 MIT — free to use, modify, and deploy.
-Just don't pretend it's a replacement for therapy 😉
+Just don’t pretend it replaces therapy 😉
+
+
