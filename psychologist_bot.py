@@ -17,29 +17,19 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-# ──────────────────────────────────────────────────────────────────────────────
-# ENV & Clients
-# ──────────────────────────────────────────────────────────────────────────────
 load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 MODEL_NAME = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 
-oa = OpenAI()  # sync SDK; вызовы оборачиваем в run_in_executor
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Logging
-# ──────────────────────────────────────────────────────────────────────────────
+oa = OpenAI()  
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     level=logging.INFO,
 )
 logger = logging.getLogger("psychologist_bot_aiogram")
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Localization & Style
-# ──────────────────────────────────────────────────────────────────────────────
 LANGUAGES = {
     "en": {
         "greet": "👋 Hello! I'm your caring support assistant. Tell me what's on your mind — I'm here for emotional support.",
@@ -150,17 +140,11 @@ _SMALLTALK_REPLY = {
     "it": "Grazie! Sto bene e sono qui per te. Cosa ti pesa di più in questo momento?",
 }
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Runtime state (thread-safe for asyncio via locks)
-# ──────────────────────────────────────────────────────────────────────────────
-USER_LANG = defaultdict(lambda: DEFAULT_LANG)       # user_id -> lang
-RECENT_CACHE = defaultdict(lambda: deque(maxlen=5)) # chat_id -> deque[str]
+USER_LANG = defaultdict(lambda: DEFAULT_LANG)       
+RECENT_CACHE = defaultdict(lambda: deque(maxlen=5)) 
 state_lock = asyncio.Lock()
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Pinecone memory (blocking) — wrap with executor
-# ──────────────────────────────────────────────────────────────────────────────
-from memory_pinecone import (  # your existing module
+from memory_pinecone import ( 
     save_message,
     get_relevant_history,
     get_recent_history,
@@ -172,9 +156,6 @@ async def run_blocking(func, *args, **kwargs):
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, lambda: func(*args, **kwargs))
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Helpers
-# ──────────────────────────────────────────────────────────────────────────────
 def _shrink_reply(text: str, max_sentences: int = REPLY_MAX_SENTENCES, max_words: int = REPLY_MAX_WORDS) -> str:
     if not isinstance(text, str):
         return text
@@ -252,9 +233,6 @@ def _is_smalltalk(text: str, lang: str) -> bool:
 def _smalltalk_reply(lang: str) -> str:
     return _SMALLTALK_REPLY.get(lang, _SMALLTALK_REPLY["en"])
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Handlers
-# ──────────────────────────────────────────────────────────────────────────────
 async def on_start(message: Message):
     lang = await get_lang(message.from_user.id)
     await message.answer(LANGUAGES[lang]["greet"], reply_markup=menu_keyboard(lang))
@@ -327,7 +305,6 @@ async def on_text(message: Message, bot: Bot):
 
     msg_lang = _detect_msg_lang(user_msg, fallback=lang)
 
-    # Smalltalk path
     if _is_smalltalk(user_msg, msg_lang):
         reply = _smalltalk_reply(msg_lang)
         await run_blocking(save_message, str(user_id), str(chat_id), user_msg, "user")
@@ -336,13 +313,10 @@ async def on_text(message: Message, bot: Bot):
         await message.answer(reply, reply_markup=menu_keyboard(lang))
         return
 
-    # Persist user message (non-blocking via executor)
     await run_blocking(save_message, str(user_id), str(chat_id), user_msg, "user")
     await recent_add(chat_id, user_msg)
 
-    # Retrieve semantic history
     history = await run_blocking(get_relevant_history, str(chat_id), user_msg, 5, 4000, 0.3)
-    # Compose messages
     max_chars = 3000
     sys_prompt = LANGUAGES[lang]["system_prompt"]
     style_hint = STYLE_HINTS.get(msg_lang, STYLE_HINTS["en"])
@@ -357,11 +331,9 @@ async def on_text(message: Message, bot: Bot):
             total_len += len(c)
     msgs.append({"role": "user", "content": user_msg})
 
-    # Chat action while thinking
     asyncio.create_task(bot.send_chat_action(chat_id, ChatAction.TYPING))
 
     try:
-        # OpenAI call in executor to keep loop free
         def _call_openai():
             resp = oa.chat.completions.create(
                 model=MODEL_NAME,
@@ -383,9 +355,6 @@ async def on_text(message: Message, bot: Bot):
     await run_blocking(save_message, str(user_id), str(chat_id), reply, "assistant")
     await message.answer(reply, reply_markup=menu_keyboard(lang))
 
-# ──────────────────────────────────────────────────────────────────────────────
-# App bootstrap
-# ──────────────────────────────────────────────────────────────────────────────
 async def main():
     if not TELEGRAM_TOKEN:
         raise RuntimeError("TELEGRAM_TOKEN is not set")
