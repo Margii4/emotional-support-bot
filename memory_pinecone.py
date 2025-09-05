@@ -11,9 +11,9 @@ logger = logging.getLogger(__name__)
 
 BOT_ID = os.getenv("BOT_ID", "psychologist")
 
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-ada-002")  
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")  
 EMBED_TRUNCATE_CHARS = int(os.getenv("EMBED_TRUNCATE_CHARS", "4000"))
-DIMENSION = 1536  # for ada-002
+DIMENSION = int(os.getenv("DIMENSION", "1536"))
 
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 PINECONE_CLOUD = os.getenv("PINECONE_CLOUD", "aws")
